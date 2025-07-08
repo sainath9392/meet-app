@@ -1,8 +1,14 @@
 // src/components/AudioChatRoom.jsx
 import React, { useEffect, useRef, useState } from "react";
+import { useParams } from "react-router-dom";
 import Peer from "simple-peer/simplepeer.min.js";
+import { io } from "socket.io-client";
+
+const socket = io("http://localhost:5000"); // Replace with backend URL if deployed
 
 const AudioChatRoom = () => {
+  const { roomId } = useParams(); // ← Gets room ID from URL
+
   const userVideoRef = useRef(null);
   const peerVideoRef = useRef(null);
   const [caption, setCaption] = useState("Say something...");
@@ -15,7 +21,15 @@ const AudioChatRoom = () => {
 
   useEffect(() => {
     let recognition;
+    if (!roomId) return;
 
+    socket.emit("join_room", roomId);
+
+    socket.on("receive_caption", (data) => {
+      setPeerCaption(data);
+    });
+
+    // 🎥 Get media and set up peer
     navigator.mediaDevices
       .getUserMedia({ video: true, audio: true })
       .then((stream) => {
@@ -31,9 +45,10 @@ const AudioChatRoom = () => {
         });
 
         peer.on("signal", (data) => {
-          peer.signal(data); // Loopback test
+          peer.signal(data); // loopback test
         });
 
+        // 🎙️ Setup speech recognition
         const SpeechRecognition =
           window.SpeechRecognition || window.webkitSpeechRecognition;
         if (SpeechRecognition) {
@@ -47,6 +62,12 @@ const AudioChatRoom = () => {
               .map((result) => result[0].transcript)
               .join("");
             setCaption(transcript);
+
+            // 📡 Emit caption to room
+            socket.emit("send_caption", {
+              roomId,
+              caption: transcript,
+            });
           };
 
           recognition.onerror = (event) => {
@@ -60,9 +81,9 @@ const AudioChatRoom = () => {
       });
 
     return () => {
-      recognition?.stop();
+      socket.off("receive_caption");
     };
-  }, []);
+  }, [roomId]);
 
   const toggleMic = () => {
     if (audioTrackRef.current) {
@@ -125,7 +146,7 @@ const AudioChatRoom = () => {
           {videoOn ? "📷 Turn Off Video" : "🎥 Turn On Video"}
         </button>
 
-        {/* Placeholder for language selector */}
+        {/* Language Selector (placeholder) */}
         <select className="px-4 py-2 rounded-lg border border-gray-400 text-sm">
           <option value="en">English</option>
           <option value="hi">Hindi</option>
