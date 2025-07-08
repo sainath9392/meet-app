@@ -8,6 +8,8 @@ import process from 'process';
 
 window.Buffer = Buffer;
 window.process = process;
+import 'simple-peer'; // Ensure simple-peer is imported globally
+
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
