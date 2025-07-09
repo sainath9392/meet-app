@@ -10,11 +10,12 @@ export default defineConfig({
       stream: "stream-browserify",
       buffer: "buffer",
       process: "process/browser",
+      "simple-peer": "simple-peer/simplepeer.min.js", // <-- add this line
     },
   },
   define: {
     global: "window",
-    "process.env": {}, // ensure process.env is defined
+    "process.env": {},
   },
   optimizeDeps: {
     include: ["buffer", "process", "stream-browserify", "simple-peer"],

@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
-import Peer from "simple-peer/simplepeer.min.js";
+import Peer from "simple-peer";
 import { io } from "socket.io-client";
 
 const socket = io("http://localhost:5000");
@@ -15,86 +15,55 @@ const AudioChatRoom = () => {
 
   const userVideoRef = useRef(null);
   const peerVideoRef = useRef(null);
+  const peerAudioRef = useRef(null);
   const audioTrackRef = useRef(null);
   const videoTrackRef = useRef(null);
   const peerRef = useRef(null);
   const recognitionRef = useRef(null);
+  const isRecognizingRef = useRef(false);
+  const streamRef = useRef(null);
 
   useEffect(() => {
-    let stream;
-
     navigator.mediaDevices
-      .getUserMedia({ video: true, audio: true })
-      .then((mediaStream) => {
-        stream = mediaStream;
+      .getUserMedia({ audio: true, video: true })
+      .then((stream) => {
+        streamRef.current = stream;
         userVideoRef.current.srcObject = stream;
-
         audioTrackRef.current = stream.getAudioTracks()[0];
         videoTrackRef.current = stream.getVideoTracks()[0];
 
         socket.emit("join_room", roomId);
 
+        socket.on("init_role", ({ initiator, peerId }) => {
+          if (!peerRef.current) {
+            createPeer(initiator, peerId, streamRef.current);
+          }
+        });
+
         socket.on("user_joined", (peerId) => {
-          peerRef.current = new Peer({
-            initiator: true,
-            trickle: false,
-            stream,
-          });
-
-          peerRef.current.on("signal", (data) => {
-            socket.emit("sending_signal", {
-              userToSignal: peerId,
-              signal: data,
-              from: socket.id,
-            });
-          });
-
-          peerRef.current.on("stream", (remoteStream) => {
-            peerVideoRef.current.srcObject = remoteStream;
-          });
-
-          peerRef.current.on("error", console.error);
+          if (!peerRef.current) {
+            createPeer(true, peerId, streamRef.current);
+          }
         });
 
         socket.on("receiving_returned_signal", (payload) => {
-          if (peerRef.current) {
-            try {
-              peerRef.current.signal(payload.signal);
-            } catch (err) {
-              console.error("Error applying signal:", err);
-            }
+          try {
+            peerRef.current?.signal(payload.signal);
+          } catch (err) {
+            console.error("Signal error:", err);
           }
+        });
+
+        socket.on("receive_caption", (caption) => {
+          setPeerCaption(caption);
         });
 
         socket.on("user_joined_late", (payload) => {
-          peerRef.current = new Peer({
-            initiator: false,
-            trickle: false,
-            stream,
-          });
-
-          peerRef.current.on("signal", (signal) => {
-            socket.emit("returning_signal", {
-              signal,
-              to: payload.from,
-            });
-          });
-
-          peerRef.current.on("stream", (remoteStream) => {
-            peerVideoRef.current.srcObject = remoteStream;
-          });
-
           try {
-            peerRef.current.signal(payload.signal);
+            peerRef.current?.signal(payload.signal);
           } catch (err) {
-            console.error("Error on late signal:", err);
+            console.error("Late signal error:", err);
           }
-
-          peerRef.current.on("error", console.error);
-        });
-
-        socket.on("receive_caption", (data) => {
-          setPeerCaption(data);
         });
 
         const SpeechRecognition =
@@ -106,23 +75,27 @@ const AudioChatRoom = () => {
           recognition.continuous = true;
           recognition.interimResults = true;
 
+          recognition.onstart = () => {
+            isRecognizingRef.current = true;
+          };
+
+          recognition.onend = () => {
+            isRecognizingRef.current = false;
+          };
+
           recognition.onresult = (event) => {
             const transcript = Array.from(event.results)
               .map((result) => result[0].transcript)
               .join("");
             setCaption(transcript);
-
-            socket.emit("send_caption", {
-              roomId,
-              caption: transcript,
-            });
+            socket.emit("send_caption", { roomId, caption: transcript });
           };
 
           recognition.onerror = (event) => {
             console.error("Speech recognition error:", event.error);
           };
 
-          if (micOn) recognition.start();
+          if (micOn && !isRecognizingRef.current) recognition.start();
         } else {
           setCaption("Speech Recognition not supported in this browser.");
         }
@@ -131,29 +104,82 @@ const AudioChatRoom = () => {
     return () => {
       recognitionRef.current?.stop();
       socket.off("receive_caption");
+      socket.off("init_role");
+      socket.off("user_joined");
+      socket.off("receiving_returned_signal");
+      socket.off("user_joined_late");
 
       if (peerRef.current) {
         peerRef.current.destroy();
         peerRef.current = null;
       }
 
-      if (stream) {
-        stream.getTracks().forEach((track) => track.stop());
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach((track) => track.stop());
       }
     };
   }, [roomId]);
 
+  const createPeer = (initiator, peerId, stream) => {
+    peerRef.current = new Peer({
+      initiator,
+      trickle: false,
+      stream,
+      config: {
+        iceServers: [{ urls: "stun:stun.l.google.com:19302" }],
+      },
+    });
+
+    peerRef.current.on("signal", (signal) => {
+      if (initiator && peerId) {
+        socket.emit("sending_signal", {
+          userToSignal: peerId,
+          signal,
+          from: socket.id,
+        });
+      } else if (!initiator && peerId) {
+        socket.emit("returning_signal", { signal, to: peerId });
+      }
+    });
+
+    peerRef.current.on("stream", (remoteStream) => {
+      console.log("Remote stream tracks:", remoteStream.getTracks());
+      if (peerVideoRef.current) {
+        peerVideoRef.current.srcObject = remoteStream;
+      }
+      if (peerAudioRef.current) {
+        peerAudioRef.current.srcObject = remoteStream;
+      }
+    });
+
+    peerRef.current.on("error", (err) => console.error("Peer error:", err));
+    peerRef.current.on("connect", () => {
+      console.log("Peer connection established");
+    });
+    peerRef.current.on("close", () => {
+      console.log("Peer connection closed");
+    });
+    peerRef.current._pc.oniceconnectionstatechange = () => {
+      console.log("ICE state:", peerRef.current._pc.iceConnectionState);
+    };
+  };
+
   const toggleMic = () => {
     if (audioTrackRef.current) {
-      audioTrackRef.current.enabled = !audioTrackRef.current.enabled;
-      setMicOn(audioTrackRef.current.enabled);
+      const newMicState = !audioTrackRef.current.enabled;
+      audioTrackRef.current.enabled = newMicState;
+      setMicOn(newMicState);
 
-      if (recognitionRef.current) {
+      const recognition = recognitionRef.current;
+      if (recognition) {
         try {
-          if (audioTrackRef.current.enabled) {
-            recognitionRef.current.start();
-          } else {
-            recognitionRef.current.stop();
+          if (newMicState && !isRecognizingRef.current) {
+            recognition.start();
+          } else if (!newMicState && isRecognizingRef.current) {
+            recognition.stop();
+            setTimeout(() => {
+              isRecognizingRef.current = false;
+            }, 500);
           }
         } catch (err) {
           console.error("Speech recognition toggle failed:", err);
@@ -164,8 +190,9 @@ const AudioChatRoom = () => {
 
   const toggleVideo = () => {
     if (videoTrackRef.current) {
-      videoTrackRef.current.enabled = !videoTrackRef.current.enabled;
-      setVideoOn(videoTrackRef.current.enabled);
+      const newVideoState = !videoTrackRef.current.enabled;
+      videoTrackRef.current.enabled = newVideoState;
+      setVideoOn(newVideoState);
     }
   };
 
@@ -196,6 +223,7 @@ const AudioChatRoom = () => {
 
         <div className="bg-white p-4 rounded-lg shadow-md">
           <video ref={peerVideoRef} autoPlay className="rounded-lg w-full" />
+          <audio ref={peerAudioRef} autoPlay />
           <p className="mt-2 text-sm text-blue-600 font-semibold">
             👥 Peer: {peerCaption}
           </p>
