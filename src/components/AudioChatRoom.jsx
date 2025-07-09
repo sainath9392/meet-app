@@ -28,7 +28,7 @@ const AudioChatRoom = () => {
       .getUserMedia({ audio: true, video: true })
       .then((stream) => {
         streamRef.current = stream;
-        userVideoRef.current.srcObject = stream;
+        if (userVideoRef.current) userVideoRef.current.srcObject = stream;
         audioTrackRef.current = stream.getAudioTracks()[0];
         videoTrackRef.current = stream.getVideoTracks()[0];
 
@@ -118,7 +118,7 @@ const AudioChatRoom = () => {
         streamRef.current.getTracks().forEach((track) => track.stop());
       }
     };
-  }, [roomId]);
+  }, [roomId, micOn]);
 
   const createPeer = (initiator, peerId, stream) => {
     peerRef.current = new Peer({
@@ -143,7 +143,6 @@ const AudioChatRoom = () => {
     });
 
     peerRef.current.on("stream", (remoteStream) => {
-      console.log("Remote stream tracks:", remoteStream.getTracks());
       if (peerVideoRef.current) {
         peerVideoRef.current.srcObject = remoteStream;
       }
@@ -159,9 +158,11 @@ const AudioChatRoom = () => {
     peerRef.current.on("close", () => {
       console.log("Peer connection closed");
     });
-    peerRef.current._pc.oniceconnectionstatechange = () => {
-      console.log("ICE state:", peerRef.current._pc.iceConnectionState);
-    };
+    if (peerRef.current._pc) {
+      peerRef.current._pc.oniceconnectionstatechange = () => {
+        console.log("ICE state:", peerRef.current._pc.iceConnectionState);
+      };
+    }
   };
 
   const toggleMic = () => {
