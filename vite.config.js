@@ -10,7 +10,6 @@ export default defineConfig({
       stream: "stream-browserify",
       buffer: "buffer",
       process: "process/browser",
-      "simple-peer": "simple-peer/simplepeer.min.js", // <-- add this line
     },
   },
   define: {
